@@ -21,12 +21,25 @@ const DOMElements = {
     loginView: document.getElementById('login-view'),
     gameView: document.getElementById('game-view'),
     loginError: document.getElementById('login-error'),
+    tabRegister: document.getElementById('tab-register'),
+    tabLogin: document.getElementById('tab-login'),
+    registerForm: document.getElementById('register-form'),
+    registerUsername: document.getElementById('register-username'),
+    registerPassword: document.getElementById('register-password'),
+    registerConfirmPassword: document.getElementById('register-confirm-password'),
+    registerActivationCode: document.getElementById('register-activation-code'),
+    registerSubmit: document.getElementById('register-submit'),
+    loginForm: document.getElementById('login-form-existing'),
+    loginUsername: document.getElementById('login-username'),
+    loginPassword: document.getElementById('login-password'),
+    loginSubmit: document.getElementById('login-submit'),
     logoutButton: document.getElementById('logout-button'),
     fullscreenButton: document.getElementById('fullscreen-button'),
     narrativeWindow: document.getElementById('narrative-window'),
     characterStatus: document.getElementById('character-status'),
     opportunitiesSpan: document.getElementById('opportunities'),
     actionInput: document.getElementById('action-input'),
+    actionInputRow: document.getElementById('action-input-row'),
     actionButton: document.getElementById('action-button'),
     startTrialButton: document.getElementById('start-trial-button'),
     loadingSpinner: document.getElementById('loading-spinner'),
@@ -55,8 +68,93 @@ const api = {
     async logout() {
         await fetch(`${API_BASE_URL}/logout`, { method: 'POST' });
         window.location.href = '/';
+    },
+    async register(payload) {
+        const response = await fetch(`${API_BASE_URL}/auth/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || '注册失败');
+        }
+        return response.json();
+    },
+    async login(payload) {
+        const response = await fetch(`${API_BASE_URL}/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || '登录失败');
+        }
+        return response.json();
     }
 };
+
+function clearLoginError() {
+    DOMElements.loginError.textContent = '';
+}
+
+function setLoginError(message) {
+    DOMElements.loginError.textContent = message;
+}
+
+function setAuthLoading(isLoading) {
+    if (DOMElements.registerSubmit) DOMElements.registerSubmit.disabled = isLoading;
+    if (DOMElements.loginSubmit) DOMElements.loginSubmit.disabled = isLoading;
+}
+
+function switchAuthTab(mode) {
+    const registerActive = mode === 'register';
+
+    DOMElements.tabRegister.classList.toggle('active', registerActive);
+    DOMElements.tabLogin.classList.toggle('active', !registerActive);
+    DOMElements.registerForm.classList.toggle('hidden', !registerActive);
+    DOMElements.loginForm.classList.toggle('hidden', registerActive);
+    clearLoginError();
+}
+
+async function handleRegisterSubmit(event) {
+    event.preventDefault();
+    clearLoginError();
+    setAuthLoading(true);
+
+    try {
+        await api.register({
+            username: DOMElements.registerUsername.value.trim(),
+            password: DOMElements.registerPassword.value,
+            confirm_password: DOMElements.registerConfirmPassword.value,
+            activation_code: DOMElements.registerActivationCode.value.trim(),
+        });
+        await initializeGame();
+    } catch (error) {
+        setLoginError(error.message || '注册失败');
+    } finally {
+        setAuthLoading(false);
+    }
+}
+
+async function handleLoginSubmit(event) {
+    event.preventDefault();
+    clearLoginError();
+    setAuthLoading(true);
+
+    try {
+        await api.login({
+            username: DOMElements.loginUsername.value.trim(),
+            password: DOMElements.loginPassword.value,
+        });
+        await initializeGame();
+    } catch (error) {
+        setLoginError(error.message || '登录失败');
+    } finally {
+        setAuthLoading(false);
+    }
+}
 
 // --- WebSocket Manager ---
 const socketManager = {
@@ -67,20 +165,28 @@ const socketManager = {
                 resolve();
                 return;
             }
+            
+            // Add a timeout to prevent hanging
+            const timeout = setTimeout(() => {
+                console.warn("WebSocket connection timed out.");
+                resolve(); // Resolve anyway so the game can at least show the state
+            }, 5000);
+
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const host = window.location.host;
-            // The token is no longer in the URL; it's read from the cookie by the server.
             const wsUrl = `${protocol}//${host}${API_BASE_URL}/ws`;
             this.socket = new WebSocket(wsUrl);
-            this.socket.binaryType = 'arraybuffer'; // Important for receiving binary data
+            this.socket.binaryType = 'arraybuffer';
 
-            this.socket.onopen = () => { console.log("WebSocket established."); resolve(); };
+            this.socket.onopen = () => { 
+                clearTimeout(timeout);
+                console.log("WebSocket established."); 
+                resolve(); 
+            };
             this.socket.onmessage = (event) => {
                 let message;
-                // Check if the data is binary (ArrayBuffer)
                 if (event.data instanceof ArrayBuffer) {
                     try {
-                        // Decompress the gzip data using pako.ungzip
                         const decompressed = pako.ungzip(new Uint8Array(event.data), { to: 'string' });
                         message = JSON.parse(decompressed);
                     } catch (err) {
@@ -88,7 +194,6 @@ const socketManager = {
                         return;
                     }
                 } else {
-                    // Fallback for non-binary messages
                     message = JSON.parse(event.data);
                 }
                 
@@ -99,7 +204,6 @@ const socketManager = {
                         render();
                         break;
                     case 'patch':
-                        // Apply JSON Patch
                         if (appState.gameState && message.patch) {
                             try {
                                 const result = jsonpatch.applyPatch(appState.gameState, message.patch, true, false);
@@ -116,8 +220,17 @@ const socketManager = {
                         break;
                 }
             };
-            this.socket.onclose = () => { console.log("Reconnecting..."); showLoading(true); setTimeout(() => this.connect(), 5000); };
-            this.socket.onerror = (error) => { console.error("WebSocket error:", error); DOMElements.loginError.textContent = '无法连接。'; reject(error); };
+            this.socket.onclose = () => { 
+                clearTimeout(timeout);
+                console.log("Reconnecting..."); 
+                showLoading(true); 
+                setTimeout(() => this.connect(), 5000); 
+            };
+            this.socket.onerror = (error) => { 
+                clearTimeout(timeout);
+                console.error("WebSocket error:", error); 
+                reject(error); 
+            };
         });
     },
     sendAction(action) {
@@ -291,7 +404,7 @@ function render() {
     }
     
     const { is_in_trial, daily_success_achieved, opportunities_remaining } = appState.gameState;
-    DOMElements.actionInput.parentElement.classList.toggle('hidden', !(is_in_trial || daily_success_achieved || opportunities_remaining < 0));
+    DOMElements.actionInputRow.classList.toggle('hidden', !(is_in_trial || daily_success_achieved || opportunities_remaining < 0));
     const startButton = DOMElements.startTrialButton;
     startButton.classList.toggle('hidden', is_in_trial || daily_success_achieved || opportunities_remaining < 0);
 
@@ -445,19 +558,30 @@ async function initializeGame() {
 
 function init() {
     // Always try to initialize the game on page load.
-    // If the user is logged in, it will show the game view.
-    // If not, the catch block in initializeGame will handle showing the login view.
     initializeGame();
 
     // Setup scroll interrupt listener
-    setupScrollInterruptListener(DOMElements.narrativeWindow);
+    if (DOMElements.narrativeWindow) {
+        setupScrollInterruptListener(DOMElements.narrativeWindow);
+    }
 
     // Setup event listeners regardless of initial view
-    DOMElements.logoutButton.addEventListener('click', handleLogout);
-    DOMElements.fullscreenButton.addEventListener('click', toggleFullscreen);
-    DOMElements.actionButton.addEventListener('click', () => handleAction());
-    DOMElements.actionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleAction(); });
-    DOMElements.startTrialButton.addEventListener('click', () => handleAction("开始试炼"));
+    if (DOMElements.logoutButton) DOMElements.logoutButton.addEventListener('click', handleLogout);
+    if (DOMElements.fullscreenButton) DOMElements.fullscreenButton.addEventListener('click', toggleFullscreen);
+    
+    if (DOMElements.tabRegister) DOMElements.tabRegister.addEventListener('click', () => switchAuthTab('register'));
+    if (DOMElements.tabLogin) DOMElements.tabLogin.addEventListener('click', () => switchAuthTab('login'));
+    
+    if (DOMElements.registerForm) DOMElements.registerForm.addEventListener('submit', handleRegisterSubmit);
+    if (DOMElements.loginForm) DOMElements.loginForm.addEventListener('submit', handleLoginSubmit);
+    
+    if (DOMElements.actionButton) DOMElements.actionButton.addEventListener('click', () => handleAction());
+    if (DOMElements.actionInput) {
+        DOMElements.actionInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleAction(); });
+    }
+    if (DOMElements.startTrialButton) {
+        DOMElements.startTrialButton.addEventListener('click', () => handleAction("开始试炼"));
+    }
 }
 
 // --- Start the App ---

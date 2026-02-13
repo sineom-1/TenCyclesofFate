@@ -6,7 +6,7 @@
 
 - **动态 AI 生成内容**:每一次游戏体验都由大型语言模型（如 GPT）实时生成，确保了故事的独特性和不可预测性。
 - **实时交互**: 通过 WebSocket 实现前端与后端的实时通信，提供流畅的游戏体验。
-- **OAuth2 认证**: 集成 Linux.do OAuth2 服务，实现安全便捷的用户登录。
+- **账号认证**: 支持用户名+密码注册，并通过激活码完成账号启用。
 - **精美的前端界面**: 采用具有“江南园林”风格的 UI 设计，提供沉浸式的视觉体验。
 - **互动式判定系统**: 游戏中的关键行动可能触发“天命判定”。AI 会根据情境请求一次 D100 投骰，其“成功”、“失败”、“大成功”或“大失败”的结果将实时影响叙事走向，增加了游戏的随机性和戏剧性。
 - **智能反作弊机制**: 内置一套基于 AI 的反作弊系统。它会分析玩家的输入行为，以识别并惩罚那些试图使用“奇巧咒语”（如 Prompt 注入）来破坏游戏平衡或牟取不当利益的玩家，确保了游戏的公平性。
@@ -18,7 +18,7 @@
   - **框架**: FastAPI
   - **Web 服务器**: Uvicorn
   - **实时通信**: WebSockets
-  - **认证**: Python-JOSE (JWT), Authlib (OAuth)
+  - **认证**: Python-JOSE (JWT), Passlib (密码哈希)
   - **数据库**: SQLite (用于存储兑换码)
   - **AI 集成**: OpenAI API
   - **依赖管理**: uv / pip
@@ -90,19 +90,16 @@ pip install -r backend/requirements.txt
     # 指定用于作弊检查的模型。
     OPENAI_MODEL_CHEAT_CHECK="gpt-3.5-turbo"
 
-    # JWT Settings for OAuth2
+    # JWT Settings
     # 必填。一个长而随机的字符串，用于签名 JWT。
     # 你可以使用 `openssl rand -hex 32` 生成。
     SECRET_KEY="a_very_secret_key_that_should_be_changed"
     ALGORITHM="HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES=600
 
-    # Linux.do OAuth Settings
-    # 必填。在 Linux.do 注册应用后获取的 Client ID。
-    LINUXDO_CLIENT_ID="your_linuxdo_client_id"
-    # 必填。在 Linux.do 注册应用后获取的 Client Secret。
-    LINUXDO_CLIENT_SECRET="your_linuxdo_client_secret"
-    LINUXDO_SCOPE="read"
+    # Admin API Settings
+    # 必填。用于保护激活码生成接口。
+    ADMIN_API_KEY="change_this_admin_api_key"
 
     # Database
     # 数据库文件路径。默认指向项目根目录下的 veloera.db 文件。
@@ -118,7 +115,26 @@ pip install -r backend/requirements.txt
 
     **重要**:
     - **`SECRET_KEY`**: 必须更改为一个强随机字符串，否则会存在安全风险。
-    - **`LINUXDO_CLIENT_ID` / `SECRET`**: 你需要在 [Linux.do](https://linux.do/) 的用户设置中注册一个新的 OAuth2 应用来获取这些凭证。**回调 URL (Redirect URI)** 必须设置为 `http://<你的域名或IP>:<端口>/callback`。例如：`http://localhost:8000/callback`。
+    - **`ADMIN_API_KEY`**: 请设置为高强度随机字符串。该密钥用于调用管理接口生成激活码。
+
+### 4.1 生成激活码（管理员）
+
+启动服务后，可通过管理接口批量生成激活码：
+
+```bash
+curl -X POST "http://localhost:8000/api/admin/activation-codes" \
+  -H "Content-Type: application/json" \
+  -H "X-Admin-Key: $ADMIN_API_KEY" \
+  -d '{"count": 10, "prefix": "BETA"}'
+```
+
+返回示例：
+
+```json
+{"codes":["BETAXXXXXXXXXXXX","BETAYYYYYYYYYYYY"]}
+```
+
+将激活码发放给用户后，用户可在首页完成“注册并激活”。
 
 ### 5. 运行应用
 
@@ -154,7 +170,8 @@ INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
 │       ├── __init__.py
 │       ├── main.py         # FastAPI 应用主入口
 │       ├── config.py       # Pydantic 配置模型
-│       ├── auth.py         # 认证和 OAuth 逻辑
+│       ├── auth.py         # 认证与 JWT 逻辑
+│       ├── auth_store.py   # 用户与激活码数据存取
 │       ├── game_logic.py   # 核心游戏逻辑
 │       ├── websocket_manager.py # WebSocket 连接管理
 │       ├── state_manager.py  # 游戏状态的保存与加载

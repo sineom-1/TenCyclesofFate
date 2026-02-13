@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Annotated
@@ -7,17 +6,17 @@ from pathlib import Path
 
 from fastapi import (
     FastAPI, APIRouter, Depends, HTTPException, status,
-    WebSocket, WebSocketDisconnect, Request
+    WebSocket, WebSocketDisconnect, Request, Header
 )
-from fastapi.responses import RedirectResponse, FileResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 
 from . import auth, game_logic, state_manager, security
 from .websocket_manager import manager as websocket_manager
 from .live_system import live_manager
 from .config import settings
+from . import auth_store
 
 # --- Logging Configuration ---
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +26,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.info("Application startup...")
+    auth_store.init_auth_tables()
     await state_manager.init_storage()
     state_manager.start_auto_save_task()
     yield
@@ -36,61 +36,34 @@ async def lifespan(app: FastAPI):
 # --- FastAPI App Instance ---
 app = FastAPI(lifespan=lifespan, title="浮生十梦")
 
-# Add SessionMiddleware for OAuth flow state management
-app.add_middleware(SessionMiddleware, secret_key=settings.SECRET_KEY)
-
 # --- Routers ---
-# Router for /api prefixed routes
 api_router = APIRouter(prefix="/api")
-# Router for root-level routes like /callback
-root_router = APIRouter()
 
 
-# --- Authentication Routes ---
-@api_router.get('/login/linuxdo')
-async def login_linuxdo(request: Request):
-    """
-    Redirects the user to Linux.do for authentication.
-    """
-    # Use a hardcoded, absolute URL for the callback to avoid ambiguity
-    # This must match the URL registered in your Linux.do OAuth application settings.
-    redirect_uri = str(request.url.replace(path="/callback"))
-    return await auth.oauth.linuxdo.authorize_redirect(request, redirect_uri)
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    confirm_password: str
+    activation_code: str
 
-@root_router.get('/callback')
-async def auth_linuxdo_callback(request: Request):
-    """
-    Handles the callback from Linux.do after authentication.
-    This route is now at the root to match the expected OAuth callback URL.
-    Fetches user info, creates a JWT, and sets it in a cookie.
-    """
-    try:
-        token = await auth.oauth.linuxdo.authorize_access_token(request)
-    except Exception as e:
-        logger.error(f"Error during OAuth callback: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not authorize access token",
-        )
 
-    resp = await auth.oauth.linuxdo.get('api/user', token=token)
-    resp.raise_for_status()
-    user_info = resp.json()
+class LoginRequest(BaseModel):
+    username: str
+    password: str
 
-    # Create JWT with user info from linux.do
+
+class GenerateActivationCodesRequest(BaseModel):
+    count: int
+    prefix: str = ""
+
+
+def _build_login_response(user: dict):
     access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    jwt_payload = {
-        "sub": user_info.get("username"),
-        "id": user_info.get("id"),
-        "name": user_info.get("name"),
-        "trust_level": user_info.get("trust_level"),
-    }
     access_token = auth.create_access_token(
-        data=jwt_payload, expires_delta=access_token_expires
+        data=auth.create_login_payload(user),
+        expires_delta=access_token_expires,
     )
-
-    # Set token in cookie and redirect to frontend
-    response = RedirectResponse(url="/")
+    response = JSONResponse({"username": user["username"]})
     response.set_cookie(
         "token",
         value=access_token,
@@ -100,12 +73,86 @@ async def auth_linuxdo_callback(request: Request):
     )
     return response
 
+
+# --- Authentication Routes ---
+@api_router.post("/auth/register")
+async def register(payload: RegisterRequest):
+    username = auth.normalize_username(payload.username)
+    activation_code = payload.activation_code.strip().upper()
+
+    username_error = auth.validate_username(username)
+    if username_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=username_error)
+
+    password_error = auth.validate_password(payload.password)
+    if password_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=password_error)
+
+    if payload.password != payload.confirm_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="两次密码输入不一致")
+
+    if not activation_code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="激活码不能为空")
+
+    user, err = auth_store.create_user_with_activation(
+        username=username,
+        password_hash=auth.get_password_hash(payload.password),
+        activation_code=activation_code,
+    )
+
+    if err == "username_taken":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在")
+    if err == "activation_invalid_or_used":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="激活码无效或已使用")
+    if err:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="注册失败")
+
+    return _build_login_response(user)
+
+
+@api_router.post("/auth/login")
+async def login(payload: LoginRequest):
+    username = auth.normalize_username(payload.username)
+
+    username_error = auth.validate_username(username)
+    if username_error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=username_error)
+
+    user = auth.authenticate_user(username, payload.password)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="用户名或密码错误",
+        )
+
+    return _build_login_response(user)
+
+
+@api_router.post("/admin/activation-codes")
+async def generate_activation_codes(
+    payload: GenerateActivationCodesRequest,
+    x_admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None,
+):
+    if x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key 无效")
+
+    if payload.count < 1 or payload.count > 200:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="count 必须在 1 到 200 之间")
+
+    try:
+        codes = auth_store.create_activation_codes(count=payload.count, prefix=payload.prefix)
+    except Exception:
+        logger.exception("生成激活码失败")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="生成激活码失败")
+
+    return {"codes": codes}
+
 @api_router.post("/logout")
 async def logout():
     """
     Logs the user out by clearing the authentication cookie.
     """
-    response = RedirectResponse(url="/")
+    response = JSONResponse({"ok": True})
     response.delete_cookie("token")
     return response
 
@@ -206,7 +253,6 @@ async def live_websocket_endpoint(websocket: WebSocket):
 
 # --- Include API Router and Mount Static Files ---
 app.include_router(api_router)
-app.include_router(root_router) # Include the root router before mounting static files
 static_files_dir = Path(__file__).parent.parent.parent / "frontend"
 
 # --- 404 Exception Handler ---

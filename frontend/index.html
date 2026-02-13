@@ -26,41 +26,81 @@
 
 <body>
     <div id="app-container">
+        <!-- Decorative Corners -->
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-tr"></div>
+        <div class="corner corner-bl"></div>
+        <div class="corner corner-br"></div>
+
         <!-- Login View -->
         <div id="login-view" class="view active">
             <h1>浮生十梦</h1>
-            <p>此乃试炼之地，请先表明身份。</p>
-            <a href="/api/login/linuxdo" class="login-button">使用 Linux.do 登录</a>
+            <p>此乃试炼之地，请先完成注册激活或登录。</p>
+
+            <div id="auth-card" class="auth-card">
+                <div class="auth-tabs">
+                    <button id="tab-register" class="auth-tab active" type="button">注册并激活</button>
+                    <button id="tab-login" class="auth-tab" type="button">账号登录</button>
+                </div>
+
+                <form id="register-form" class="auth-form">
+                    <input id="register-username" type="text" autocomplete="username" placeholder="用户名（3-32位，字母数字_-）" required>
+                    <input id="register-password" type="password" autocomplete="new-password" placeholder="密码（至少8位）" required>
+                    <input id="register-confirm-password" type="password" autocomplete="new-password" placeholder="确认密码" required>
+                    <input id="register-activation-code" type="text" placeholder="激活码" required>
+                    <button id="register-submit" class="login-button" type="submit">注册并进入</button>
+                </form>
+
+                <form id="login-form-existing" class="auth-form hidden">
+                    <input id="login-username" type="text" autocomplete="username" placeholder="用户名" required>
+                    <input id="login-password" type="password" autocomplete="current-password" placeholder="密码" required>
+                    <button id="login-submit" class="login-button" type="submit">登录进入</button>
+                </form>
+            </div>
+
             <p id="login-error" class="error-message"></p>
         </div>
 
         <!-- Game View -->
         <div id="game-view" class="view">
             <header id="game-header">
-                <h1>浮生一梦</h1>
+                <div class="header-left">
+                    <h1>浮生一梦</h1>
+                </div>
                 <div id="game-status">
-                    <span>剩余机缘: <span id="opportunities">10</span></span>
-                    <button id="fullscreen-button" class="header-button" title="全屏模式">⛶</button>
-                    <button id="logout-button" class="header-button">登出</button>
+                    <div class="status-item">
+                        <span class="label">机缘:</span>
+                        <span id="opportunities" class="value">10</span>
+                    </div>
+                    <div class="header-actions">
+                        <button id="fullscreen-button" class="header-button" title="全屏模式">⛶</button>
+                        <button id="logout-button" class="header-button">离去</button>
+                    </div>
                 </div>
             </header>
 
             <aside id="status-panel">
-                <!-- Character status will be rendered here -->
-                <p>【人物业力】</p>
-                <div id="character-status"></div>
+                <div class="panel-title">
+                    <span class="ornament"></span>
+                    <h2>人物业力</h2>
+                    <span class="ornament"></span>
+                </div>
+                <div id="character-status" class="custom-scrollbar"></div>
             </aside>
 
             <main id="main-content">
-                <div id="narrative-window">
+                <div id="narrative-window" class="custom-scrollbar">
                     <!-- Game narrative will be appended here -->
                 </div>
             </main>
 
             <footer id="action-area">
-                <div class="action-input-row">
-                    <input type="text" id="action-input" placeholder="汝欲何为..." disabled>
-                    <button id="action-button" disabled>定</button>
+                <div id="action-input-row" class="action-input-row">
+                    <div class="input-wrapper">
+                        <input type="text" id="action-input" placeholder="汝欲何为..." disabled>
+                        <span class="input-decoration"></span>
+                    </div>
+                    <button id="action-button" disabled><span>定</span></button>
                 </div>
                 <button id="start-trial-button" class="hidden">开启下一次试炼</button>
             </footer>

@@ -4,25 +4,12 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, status, Cookie
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from authlib.integrations.starlette_client import OAuth
 
 from .config import settings
+from . import auth_store
 
 # --- Setup ---
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-# oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token") # No longer needed for cookie-based auth
-
-# --- OAuth Client ---
-oauth = OAuth()
-oauth.register(
-    name="linuxdo",
-    client_id=settings.LINUXDO_CLIENT_ID,
-    client_secret=settings.LINUXDO_CLIENT_SECRET,
-    access_token_url="https://connect.linux.do/oauth2/token",
-    authorize_url="https://connect.linux.do/oauth2/authorize",
-    api_base_url="https://connect.linux.do/",
-    client_kwargs={"scope": settings.LINUXDO_SCOPE},
-)
 
 # --- Models ---
 class TokenData(object):
@@ -30,11 +17,56 @@ class TokenData(object):
     trust_level: int | None = 0
 
 # --- Core Functions ---
-def verify_password(plain_password, hashed_password):
+def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
-def get_password_hash(password):
+def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
+
+def normalize_username(username: str) -> str:
+    return username.strip()
+
+
+def validate_username(username: str) -> str | None:
+    normalized = normalize_username(username)
+    if not normalized:
+        return "用户名不能为空"
+    if len(normalized) < 3:
+        return "用户名至少 3 个字符"
+    if len(normalized) > 32:
+        return "用户名不能超过 32 个字符"
+    if not all(char.isalnum() or char in {"_", "-"} for char in normalized):
+        return "用户名只能包含字母、数字、下划线和中划线"
+    return None
+
+
+def validate_password(password: str) -> str | None:
+    if len(password) < 8:
+        return "密码至少 8 位"
+    return None
+
+
+def create_login_payload(user: dict) -> dict:
+    return {
+        "sub": user["username"],
+        "id": user["id"],
+        "name": user["username"],
+        "trust_level": 0,
+    }
+
+
+def authenticate_user(username: str, password: str) -> dict | None:
+    normalized = normalize_username(username)
+    user = auth_store.get_user_by_username(normalized)
+    if user is None:
+        return None
+    if not verify_password(password, user["password_hash"]):
+        return None
+    return {
+        "id": user["id"],
+        "username": user["username"],
+    }
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
@@ -77,7 +109,7 @@ async def get_current_user(token: Annotated[str | None, Cookie()] = None):
         if username is None:
             raise credentials_exception
         
-        # The JWT payload contains the user info from OAuth
+        # The JWT payload contains user identity from local auth
         user = {
             "username": username,
             "trust_level": payload.get("trust_level", 0),

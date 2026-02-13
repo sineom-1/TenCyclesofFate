@@ -13,18 +13,16 @@ class Settings(BaseSettings):
     IMAGE_GEN_API_KEY: str | None = None  # 图片生成API密钥，为空则使用 OPENAI_API_KEY
     IMAGE_GEN_IDLE_SECONDS: int = 10  # 状态静止多少秒后触发图片生成
 
-    # JWT Settings for OAuth2
+    # JWT Settings
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 600
 
+    # Admin API
+    ADMIN_API_KEY: str
+
     # Database URL
     DATABASE_URL: str = "sqlite:///./veloera.db"
-
-    # Linux.do OAuth Settings
-    LINUXDO_CLIENT_ID: str | None = None
-    LINUXDO_CLIENT_SECRET: str | None = None
-    LINUXDO_SCOPE: str = "read"
 
     # Server Settings
     HOST: str = "127.0.0.1"

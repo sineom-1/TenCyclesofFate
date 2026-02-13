@@ -14,7 +14,7 @@ def generate_test_token():
     """
     生成一个用于测试的JWT令牌。
     """
-    # 模拟一个来自Linux.do OAuth流程的用户信息
+    # 模拟一个本地认证用户信息
     # 您可以根据需要修改这些值
 
     id = random.randint(10000, 99999)
